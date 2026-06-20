@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A single-file Windows desktop Pomodoro timer (`countdown_timer.py`, ~500 lines, plain `tkinter`). It runs as a hidden tool window that lives in the system tray and a tiny always-on-top corner widget; there is no package structure, no test suite, and no build step.
+A single-file Windows desktop Pomodoro timer (`countdown_timer.py`, ~550 lines, plain `tkinter`). It runs as a hidden tool window that lives in the system tray and a tiny always-on-top corner widget; there is no package structure, no test suite, and no build step.
 
 ## Commands
 
@@ -25,7 +25,7 @@ A single-file Windows desktop Pomodoro timer (`countdown_timer.py`, ~500 lines, 
 - Beyond the Tk `mainloop`, there are up to two daemon threads: the per-run **timer thread** (`PomodoroState._run`) and the **tray icon** thread (`TrayApp.run_detached`). The AutoHotkey toggle is polled on the Tk thread via `root.after`, not a separate thread.
 - All `PomodoroState` mutation is guarded by `self._lock`.
 - **`_generation` counter:** incremented on every `start()`/phase rollover; each `_run` thread captures its `gen` and exits when it no longer matches. This is what prevents a stale thread surviving a pause+restart and double-counting. Preserve this pattern when touching `_run`/`_on_end`/`start`.
-- **Cross-thread → Tk rule:** the only safe way to touch tkinter from a non-Tk thread is `self.root.after(0, fn)`. Every such call (`_schedule_refresh`, `_hotkey_callback`, `_quit`) is wrapped in `try/except Exception` — a destroyed window raises `TclError`, *not* only `RuntimeError`, so do not narrow these excepts.
+- **Cross-thread → Tk rule:** the only safe way to touch tkinter from a non-Tk thread is `self.root.after(0, fn)`. The cross-thread callers — `_schedule_refresh` (from the timer thread via `_notify`) and `_quit` (from the tray thread) — wrap it in `try/except Exception` because a destroyed window raises `TclError`, *not* only `RuntimeError`; do not narrow these excepts. (`_poll_toggle_signal` already runs on the Tk thread, so it toggles directly.)
 - **Timing** is anchored to a `time.monotonic()` deadline (not by decrementing per sleep) so sleep overshoot doesn't accumulate drift over a session.
 - **Shutdown:** `_quit` (callable from any thread) marshals to `_do_quit` (Tk thread) which stops the tray and calls `root.destroy()`; `mainloop()` then returns and the process exits — daemon threads die with it. There is intentionally **no `sys.exit()`**.
 
