@@ -35,7 +35,9 @@ without it (use the tray icon instead).
 
 ## Setup
 
-Double-click **`setup.bat`** (installs the optional dependencies), or:
+Double-click **`setup.bat`**. It installs the optional dependencies and creates
+a **"Pomodoro Timer" shortcut on your Desktop** (with the app icon). To install
+the dependencies only:
 
 ```sh
 python -m pip install -r requirements.txt
@@ -43,7 +45,8 @@ python -m pip install -r requirements.txt
 
 ## Run
 
-Double-click **`run.bat`** (launches without a console window), or:
+Launch from the **Pomodoro Timer** desktop shortcut, double-click **`run.bat`**
+(both launch without a console window), or:
 
 ```sh
 python countdown_timer.py
@@ -82,6 +85,9 @@ sync. Edit the `!2::` line in the script to rebind the key.
 | --- | --- |
 | `countdown_timer.py` | The entire application |
 | `pomodoro.ahk` | AutoHotkey script providing the Alt+2 global hotkey |
-| `setup.bat` | Installs optional dependencies |
+| `setup.bat` | Installs dependencies and creates the desktop shortcut |
 | `run.bat` | Launches the app (prefers `pythonw`) |
+| `make_icon.py` | Generates `pomodoro.ico` (run by setup) |
+| `create_shortcut.ps1` | Creates the desktop shortcut (run by setup) |
+| `pomodoro.ico` | App / shortcut icon |
 | `requirements.txt` | `pystray`, `Pillow`, `plyer` |

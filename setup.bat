@@ -43,6 +43,13 @@ if %errorlevel% neq 0 (
 )
 
 echo.
-echo Setup complete! Double-click run.bat to start the timer.
+echo Creating desktop shortcut...
+:: Refresh the app icon (best effort; a committed pomodoro.ico is used as fallback)
+%PYTHON% "%~dp0make_icon.py" >nul 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0create_shortcut.ps1"
+
+echo.
+echo Setup complete! Launch from the "Pomodoro Timer" desktop shortcut,
+echo or double-click run.bat.
 echo.
 pause

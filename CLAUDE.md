@@ -9,7 +9,8 @@ A single-file Windows desktop Pomodoro timer (`countdown_timer.py`, ~500 lines, 
 ## Commands
 
 - **Install deps:** `setup.bat` (or `python -m pip install -r requirements.txt`). All three deps — `pystray`, `Pillow`, `plyer` — are **optional**; the app degrades gracefully without them (see below).
-- **Run:** `run.bat` (prefers `pythonw` so there's no console window) or `python countdown_timer.py`.
+- **Run:** the **Pomodoro Timer** desktop shortcut, `run.bat` (prefers `pythonw` so there's no console window), or `python countdown_timer.py`.
+- **Shortcut/icon:** `setup.bat` regenerates `pomodoro.ico` via `make_icon.py` (best effort — a committed `.ico` is the fallback if Pillow is missing) and runs `create_shortcut.ps1` to drop a Desktop `.lnk` targeting the windowed Python + `countdown_timer.py`. `make_icon.py` hardcodes the palette hexes mirrored from `countdown_timer.py` — keep them in sync if the palette changes.
 - **No tests/lint exist.** Verify changes by byte-compiling (`python -m py_compile countdown_timer.py`) and by a **headless smoke test**: import the module, construct `PomodoroState()` + `TimerWindow(state)`, call `win.root.update()` (never `mainloop()` — it blocks), mutate `state.phase`/`state.time_remaining`, call `win._refresh_ui()`, inspect widget state via `.cget(...)`, then `win.root.destroy()`. This exercises real UI paths without the blocking event loop. A native window screenshot is not capturable from a headless tool context — to see it live, launch it and drive it manually.
 
 ## Platform
