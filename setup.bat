@@ -6,25 +6,25 @@ echo   Pomodoro Timer - Setup
 echo ============================================
 echo.
 
-:: Check for Python
-python --version >nul 2>&1
-if %errorlevel% neq 0 (
-    py --version >nul 2>&1
-    if %errorlevel% neq 0 (
-        echo [!] Python not found.
-        echo.
-        echo Please install Python first:
-        echo   1. Go to https://www.python.org/downloads/
-        echo   2. Download the latest Python 3.x installer
-        echo   3. Run it and CHECK "Add Python to PATH"
-        echo   4. Re-run this setup.bat after installation
-        echo.
-        pause
-        exit /b 1
-    )
-    set PYTHON=py
-) else (
-    set PYTHON=python
+:: Check for Python (prefer 'python', fall back to the 'py' launcher).
+:: Uses && + "if not defined" rather than %errorlevel% inside a block — a
+:: nested "if %errorlevel%" would expand at parse time and ignore py's result.
+set "PYTHON="
+python --version >nul 2>&1 && set "PYTHON=python"
+if not defined PYTHON (
+    py --version >nul 2>&1 && set "PYTHON=py"
+)
+if not defined PYTHON (
+    echo [!] Python not found.
+    echo.
+    echo Please install Python first:
+    echo   1. Go to https://www.python.org/downloads/
+    echo   2. Download the latest Python 3.x installer
+    echo   3. Run it and CHECK "Add Python to PATH"
+    echo   4. Re-run this setup.bat after installation
+    echo.
+    pause
+    exit /b 1
 )
 
 echo [OK] Python found.

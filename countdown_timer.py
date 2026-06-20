@@ -275,23 +275,26 @@ class TimerWindow:
 
         state.add_tick_callback(self._schedule_refresh)
         # Discard any stale signal from a previous run, then watch for AutoHotkey.
-        self._clear_toggle_signal()
+        self._consume_toggle_signal()
         self.root.after(self.SIGNAL_POLL_MS, self._poll_toggle_signal)
         # Window starts hidden, so the corner timer is the visible surface.
         self._show_mini()
 
     @staticmethod
-    def _clear_toggle_signal():
+    def _consume_toggle_signal():
+        # Atomically consume the signal. Returns True iff the file existed and
+        # was removed by this call — so a transient lock (AHK mid-write) reports
+        # False and is retried next poll rather than toggling without consuming.
         try:
             os.remove(TOGGLE_SIGNAL)
+            return True
         except OSError:
-            pass  # not present (or unreadable) — nothing to clear
+            return False  # absent (normal) or briefly locked (retry next poll)
 
     def _poll_toggle_signal(self):
         # Runs on the Tk thread, so it can toggle directly. AutoHotkey drops
-        # TOGGLE_SIGNAL on the hotkey; consume it and flip window visibility.
-        if os.path.exists(TOGGLE_SIGNAL):
-            self._clear_toggle_signal()
+        # TOGGLE_SIGNAL on the hotkey; toggle only when we actually consumed it.
+        if self._consume_toggle_signal():
             self._toggle_visibility()
         self.root.after(self.SIGNAL_POLL_MS, self._poll_toggle_signal)
 
@@ -522,6 +525,14 @@ class TimerWindow:
             self.root.withdraw()
             self._show_mini()
 
+    def _request_show(self):
+        # Called from the tray thread. Tcl is not thread-safe, so marshal to the
+        # Tk thread (mirrors _quit) instead of running show() off-thread.
+        try:
+            self.root.after(0, self.show)
+        except Exception:
+            pass
+
     def _quit(self):
         # Called from any thread (tray menu, hotkey). Marshals to the main
         # thread so root.destroy() runs in the correct tkinter context.
@@ -538,7 +549,7 @@ class TimerWindow:
         self.root.destroy()
 
     def run(self):
-        self._tray = TrayApp(self._state, self.show, self._quit)
+        self._tray = TrayApp(self._state, self._request_show, self._quit)
         self._tray.run_detached()
         self._refresh_ui()
         self.root.mainloop()
