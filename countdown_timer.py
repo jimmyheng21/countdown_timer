@@ -1,9 +1,9 @@
 import tkinter as tk
 import threading
 import time
+import os
+import tempfile
 import winsound
-import ctypes
-from ctypes import wintypes
 
 try:
     from PIL import Image, ImageDraw
@@ -37,35 +37,11 @@ PHASE_NAMES     = {0: "FOCUS", 1: "BREAK"}
 PHASE_COLOURS   = {0: FOCUS_CLR, 1: BREAK_CLR}
 PHASE_DURATIONS = {0: FOCUS_DURATION, 1: BREAK_DURATION}
 
-# ── Global hotkey (Alt+2) via Win32 message-only window ───────────────────────
-WM_HOTKEY  = 0x0312
-MOD_ALT    = 0x0001
-VK_2       = 0x32
-HOTKEY_ID  = 1
-
-def _start_hotkey_listener(callback):
-    def _listener():
-        hwnd = ctypes.windll.user32.CreateWindowExW(
-            0, "STATIC", None, 0, 0, 0, 0, 0,
-            wintypes.HWND(-3),  # HWND_MESSAGE
-            None, None, None
-        )
-        if not ctypes.windll.user32.RegisterHotKey(hwnd, HOTKEY_ID, MOD_ALT, VK_2):
-            ctypes.windll.user32.MessageBoxW(
-                None,
-                "Alt+2 is already registered by another app.\nThe hotkey will not work.",
-                "Pomodoro Timer",
-                0x30,  # MB_ICONWARNING
-            )
-        msg = wintypes.MSG()
-        while ctypes.windll.user32.GetMessageW(ctypes.byref(msg), hwnd, 0, 0) > 0:
-            if msg.message == WM_HOTKEY:
-                callback()
-            ctypes.windll.user32.TranslateMessage(ctypes.byref(msg))
-            ctypes.windll.user32.DispatchMessageW(ctypes.byref(msg))
-
-    t = threading.Thread(target=_listener, daemon=True)
-    t.start()
+# ── Global hotkey bridge ──────────────────────────────────────────────────────
+# The global hotkey lives in AutoHotkey (see pomodoro.ahk), not in this process.
+# AHK drops this signal file on the hotkey; the app polls for it and toggles the
+# window itself, so app-managed state (the corner mini timer) stays correct.
+TOGGLE_SIGNAL = os.path.join(tempfile.gettempdir(), "pomodoro_toggle.signal")
 
 # ── Pomodoro state ─────────────────────────────────────────────────────────────
 class PomodoroState:
@@ -271,6 +247,7 @@ class TimerWindow:
     RING_TRACK_W = 8    # unfilled rail behind it
     MARGIN_X     = 16   # symmetric horizontal padding around content
     MARGIN_Y     = 8    # breathing room below the content
+    SIGNAL_POLL_MS = 250  # how often to check for AutoHotkey's toggle signal
 
     def __init__(self, state: PomodoroState):
         self._state = state
@@ -288,7 +265,7 @@ class TimerWindow:
         self.root.configure(bg=BG)
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-        # Keep out of taskbar; accessible only via tray icon or Alt+2
+        # Keep out of taskbar; accessible via the tray icon or the AutoHotkey hotkey
         self.root.wm_attributes("-toolwindow", True)
 
         self._build_ui()
@@ -297,18 +274,26 @@ class TimerWindow:
         self.root.withdraw()  # start hidden — must precede mainloop()
 
         state.add_tick_callback(self._schedule_refresh)
-        _start_hotkey_listener(self._hotkey_callback)
+        # Discard any stale signal from a previous run, then watch for AutoHotkey.
+        self._clear_toggle_signal()
+        self.root.after(self.SIGNAL_POLL_MS, self._poll_toggle_signal)
         # Window starts hidden, so the corner timer is the visible surface.
         self._show_mini()
 
-    def _hotkey_callback(self):
-        # Called from the Win32 hotkey listener thread — root.after is the only
-        # safe cross-thread tkinter call, and it raises TclError/RuntimeError
-        # if the window has already been destroyed.
+    @staticmethod
+    def _clear_toggle_signal():
         try:
-            self.root.after(0, self._toggle_visibility)
-        except Exception:
-            pass
+            os.remove(TOGGLE_SIGNAL)
+        except OSError:
+            pass  # not present (or unreadable) — nothing to clear
+
+    def _poll_toggle_signal(self):
+        # Runs on the Tk thread, so it can toggle directly. AutoHotkey drops
+        # TOGGLE_SIGNAL on the hotkey; consume it and flip window visibility.
+        if os.path.exists(TOGGLE_SIGNAL):
+            self._clear_toggle_signal()
+            self._toggle_visibility()
+        self.root.after(self.SIGNAL_POLL_MS, self._poll_toggle_signal)
 
     # ── UI ─────────────────────────────────────────────────────────────────────
     def _build_ui(self):

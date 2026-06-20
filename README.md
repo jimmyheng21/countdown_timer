@@ -13,7 +13,8 @@ A simple **25-minute focus → 5-minute break** cycle, repeated.
   top-right corner whenever the main window is hidden, so the time is always a
   glance away.
 - **System tray** — start/pause, reset, open, and quit from the tray icon.
-- **Global hotkey** — press **Alt+2** anywhere to show or hide the window.
+- **Global hotkey** — press **Alt+2** anywhere to show or hide the window
+  (provided by AutoHotkey — see below).
 - **Sound + desktop notification** at the end of each phase.
 - **Warm, distraction-free design** — one accent colour flows through the phase
   badge, the progress ring, and the primary button.
@@ -24,9 +25,13 @@ A simple **25-minute focus → 5-minute break** cycle, repeated.
 - Python 3.x ([python.org](https://www.python.org/downloads/) — tick *Add Python
   to PATH* during install)
 
-The three dependencies (`pystray`, `Pillow`, `plyer`) are **optional**: without
-them the timer still runs, but the tray icon and/or rich notifications are
-reduced. Closing the window quits the app when the tray isn't available.
+The three Python dependencies (`pystray`, `Pillow`, `plyer`) are **optional**:
+without them the timer still runs, but the tray icon and/or rich notifications
+are reduced. Closing the window quits the app when the tray isn't available.
+
+The **Alt+2 global hotkey** is optional too and is provided by
+[AutoHotkey v2](https://www.autohotkey.com/) via `pomodoro.ahk` — the app works
+without it (use the tray icon instead).
 
 ## Setup
 
@@ -51,21 +56,32 @@ the icon in your system tray.
 
 | Action | How |
 | --- | --- |
-| Show / hide the window | **Alt+2**, or tray → **Open** |
+| Show / hide the window | **Alt+2** (via AutoHotkey), or tray → **Open** |
 | Start / pause | **Start/Pause** button, or tray → **Start/Pause** |
 | Reset the current phase | **Reset** |
 | Skip to the next phase | **Skip →** |
 | Hide to the corner | Close the window (✕) — it does not quit |
 | Quit | Tray → **Quit** |
 
-> **Tip:** Alt+2 is a system-wide hotkey, so only one instance can hold it. If a
-> second copy is launched it will warn that the hotkey is already in use.
+### Alt+2 global hotkey (AutoHotkey)
+
+The window-toggle hotkey is handled by AutoHotkey, not the app itself:
+
+1. Install [AutoHotkey v2](https://www.autohotkey.com/).
+2. Double-click **`pomodoro.ahk`** (or drop a shortcut to it in `shell:startup`
+   to run it at login).
+3. With the timer running, press **Alt+2** anywhere to show/hide it.
+
+`pomodoro.ahk` simply drops a signal file in your temp folder on Alt+2; the
+running app polls for it and toggles the window (and its corner mini timer) in
+sync. Edit the `!2::` line in the script to rebind the key.
 
 ## Files
 
 | File | Purpose |
 | --- | --- |
 | `countdown_timer.py` | The entire application |
+| `pomodoro.ahk` | AutoHotkey script providing the Alt+2 global hotkey |
 | `setup.bat` | Installs optional dependencies |
 | `run.bat` | Launches the app (prefers `pythonw`) |
 | `requirements.txt` | `pystray`, `Pillow`, `plyer` |

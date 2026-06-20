@@ -14,14 +14,14 @@ A single-file Windows desktop Pomodoro timer (`countdown_timer.py`, ~500 lines, 
 
 ## Platform
 
-**Windows-only.** Hard dependencies on `winsound` (alert beeps), `ctypes`/Win32 (`RegisterHotKey`, message-only window), the `-toolwindow` attribute, and a PowerShell `NotifyIcon` fallback for notifications. Do not assume cross-platform.
+**Windows-only.** Hard dependencies on `winsound` (alert beeps), the `-toolwindow` attribute, and a PowerShell `NotifyIcon` fallback for notifications. Do not assume cross-platform.
 
 ## Architecture — the parts that span files/threads
 
 **Model/view split.** `PomodoroState` holds all timer logic and is UI-agnostic; `TimerWindow` is the view and registers a tick callback via `state.add_tick_callback(...)`. State never touches tkinter.
 
 **Concurrency is the load-bearing design — read this before editing timing or shutdown:**
-- Beyond the Tk `mainloop`, there are up to three daemon threads: the per-run **timer thread** (`PomodoroState._run`), the **Win32 hotkey listener** (`_start_hotkey_listener`), and the **tray icon** thread (`TrayApp.run_detached`).
+- Beyond the Tk `mainloop`, there are up to two daemon threads: the per-run **timer thread** (`PomodoroState._run`) and the **tray icon** thread (`TrayApp.run_detached`). The AutoHotkey toggle is polled on the Tk thread via `root.after`, not a separate thread.
 - All `PomodoroState` mutation is guarded by `self._lock`.
 - **`_generation` counter:** incremented on every `start()`/phase rollover; each `_run` thread captures its `gen` and exits when it no longer matches. This is what prevents a stale thread surviving a pause+restart and double-counting. Preserve this pattern when touching `_run`/`_on_end`/`start`.
 - **Cross-thread → Tk rule:** the only safe way to touch tkinter from a non-Tk thread is `self.root.after(0, fn)`. Every such call (`_schedule_refresh`, `_hotkey_callback`, `_quit`) is wrapped in `try/except Exception` — a destroyed window raises `TclError`, *not* only `RuntimeError`, so do not narrow these excepts.
@@ -38,4 +38,4 @@ A single-file Windows desktop Pomodoro timer (`countdown_timer.py`, ~500 lines, 
 
 **Window sizing.** The main window is **not** a hardcoded box — `_fit_window` measures content (`winfo_reqwidth/height`) plus `MARGIN_X/Y` and `_snap_top_right` places it. Don't reintroduce fixed `geometry()` dimensions.
 
-**Global hotkey.** Alt+2 (toggle show/hide) is registered via a Win32 message-only window. Only one process can own the hotkey — a **second running instance** will fail to register it and pop a warning box, so kill stale instances before launching.
+**Global hotkey is external.** Alt+2 is owned by AutoHotkey (`pomodoro.ahk`), not this process. AHK drops a signal file (`TOGGLE_SIGNAL`, in the temp dir) on the hotkey; the app polls for it on the Tk thread (`_poll_toggle_signal`, every `SIGNAL_POLL_MS`) and runs `_toggle_visibility` itself. This indirection is deliberate: the app must own the toggle so the corner mini timer stays in sync, and the window title changes every tick so AHK can't match it. The app clears a stale signal at startup. If you add more AHK-triggered actions, follow the same drop-a-file / poll-and-consume pattern rather than reintroducing a Win32 message loop.
