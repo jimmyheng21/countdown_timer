@@ -19,10 +19,8 @@ except ImportError:
     HAS_NOTIFY = False
 
 # ── Durations (seconds) ────────────────────────────────────────────────────────
-FOCUS_DURATION       = 25 * 60
-SHORT_BREAK          = 5  * 60
-LONG_BREAK           = 15 * 60
-SESSIONS_BEFORE_LONG = 4
+FOCUS_DURATION = 25 * 60
+BREAK_DURATION = 5  * 60
 
 # ── Warm beige palette ─────────────────────────────────────────────────────────
 BG         = "#FFF3E8"   # lightest cream
@@ -30,19 +28,14 @@ RING_BG    = "#EDD8C3"   # soft peach
 SAND       = "#DDD3AF"   # warm sand
 
 FOCUS_CLR  = "#CCA882"   # caramel  – focus ring
-SHORT_CLR  = "#C8B098"   # mid-warm – short break ring
-LONG_CLR   = "#B8A888"   # muted sand – long break ring
+BREAK_CLR  = "#C8B098"   # mid-warm – break ring
 
 TEXT_CLR   = "#5C3D2E"   # dark warm brown
 MUTED_CLR  = "#B09070"   # medium warm brown
 
-BTN_BG     = "#EDD8C3"
-BTN_HOVER  = "#DDD3AF"
-BTN_ACTIVE = "#CCC3A0"
-
-PHASE_NAMES     = {0: "FOCUS", 1: "SHORT BREAK", 2: "LONG BREAK"}
-PHASE_COLOURS   = {0: FOCUS_CLR, 1: SHORT_CLR,   2: LONG_CLR}
-PHASE_DURATIONS = {0: FOCUS_DURATION, 1: SHORT_BREAK, 2: LONG_BREAK}
+PHASE_NAMES     = {0: "FOCUS", 1: "BREAK"}
+PHASE_COLOURS   = {0: FOCUS_CLR, 1: BREAK_CLR}
+PHASE_DURATIONS = {0: FOCUS_DURATION, 1: BREAK_DURATION}
 
 # ── Global hotkey (Alt+2) via Win32 message-only window ───────────────────────
 WM_HOTKEY  = 0x0312
@@ -78,7 +71,6 @@ def _start_hotkey_listener(callback):
 class PomodoroState:
     def __init__(self):
         self.phase            = 0
-        self.session_count    = 0
         self.time_remaining   = FOCUS_DURATION
         self.is_running       = False
         self._lock            = threading.Lock()
@@ -128,11 +120,8 @@ class PomodoroState:
         self._notify()
 
     def _advance(self):
-        if self.phase == 0:
-            self.session_count += 1
-            self.phase = 2 if self.session_count % SESSIONS_BEFORE_LONG == 0 else 1
-        else:
-            self.phase = 0
+        # Simple two-phase cycle: focus ↔ break.
+        self.phase = 1 if self.phase == 0 else 0
         self.time_remaining = PHASE_DURATIONS[self.phase]
 
     def _run(self, gen):
@@ -205,6 +194,14 @@ def _send_notification(next_phase):
 def fmt_time(secs):
     return f"{secs // 60:02d}:{secs % 60:02d}"
 
+def _shade(hex_clr, f):
+    # Multiply each RGB channel by f (<1 darkens) — used to derive hover/pressed
+    # states from the live phase accent so the whole palette shifts together.
+    h = hex_clr.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    r, g, b = (max(0, min(255, round(c * f))) for c in (r, g, b))
+    return f"#{r:02X}{g:02X}{b:02X}"
+
 
 # ── Tray icon ──────────────────────────────────────────────────────────────────
 def _make_tray_icon(phase):
@@ -269,28 +266,40 @@ class TrayApp:
 
 # ── Main window ────────────────────────────────────────────────────────────────
 class TimerWindow:
-    RING_SIZE = 240
-    RING_W    = 14
+    RING_SIZE    = 240
+    RING_W       = 16   # progress arc — slightly heavier than the track
+    RING_TRACK_W = 8    # unfilled rail behind it
+    MARGIN_X     = 16   # symmetric horizontal padding around content
+    MARGIN_Y     = 8    # breathing room below the content
 
     def __init__(self, state: PomodoroState):
         self._state = state
         self._tray  = None
+        self._mini  = None   # tiny corner timer, shown while main window hidden
+        self._w     = 320    # placeholder; recomputed from content in _fit_window
+        self._h     = 484
+        # Live accent (phase colour) + derived hover shade; drives the primary
+        # button so badge, ring and button always share one colour.
+        self._accent       = FOCUS_CLR
+        self._accent_hover = _shade(FOCUS_CLR, 0.90)
 
         self.root = tk.Tk()
         self.root.title("Pomodoro Timer")
         self.root.configure(bg=BG)
         self.root.resizable(False, False)
-        self.root.geometry("400x500")
-        self.root.update_idletasks()
-        self._snap_top_right()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         # Keep out of taskbar; accessible only via tray icon or Alt+2
         self.root.wm_attributes("-toolwindow", True)
-        self.root.withdraw()  # start hidden
 
         self._build_ui()
+        self._build_mini()
+        self._fit_window()    # size to content, then place top-right
+        self.root.withdraw()  # start hidden — must precede mainloop()
+
         state.add_tick_callback(self._schedule_refresh)
         _start_hotkey_listener(self._hotkey_callback)
+        # Window starts hidden, so the corner timer is the visible surface.
+        self._show_mini()
 
     def _hotkey_callback(self):
         # Called from the Win32 hotkey listener thread — root.after is the only
@@ -305,78 +314,80 @@ class TimerWindow:
     def _build_ui(self):
         r = self.root
 
-        # App title
-        tk.Label(r, text="POMODORO  TIMER", bg=BG, fg=MUTED_CLR,
-                 font=("Segoe UI", 10, "bold"), pady=14).pack()
+        # Quiet brand eyebrow — letter-spaced caps, deliberately recessive so the
+        # time stays the hero. Not bold: it labels, it doesn't announce.
+        tk.Label(r, text="P O M O D O R O", bg=BG, fg=MUTED_CLR,
+                 font=("Segoe UI", 9)).pack(pady=(16, 2))
 
-        # Phase badge — use FOCUS_CLR directly so it stays in sync with
-        # PHASE_COLOURS[0]; a separate CARAMEL alias would diverge silently.
+        # Phase badge — carries the live accent (FOCUS_CLR / BREAK_CLR).
         self._lbl_phase = tk.Label(r, text="FOCUS", bg=BG, fg=FOCUS_CLR,
-                                   font=("Segoe UI", 12, "bold"))
+                                   font=("Segoe UI", 11, "bold"))
         self._lbl_phase.pack()
 
-        # Ring canvas
+        # Ring canvas — thin track with a heavier progress arc over it.
         cs = self.RING_SIZE + 20
         self._canvas = tk.Canvas(r, width=cs, height=cs, bg=BG,
                                   highlightthickness=0)
-        self._canvas.pack(pady=8)
+        self._canvas.pack(pady=(6, 10))
 
         cx = cy = cs // 2
         rv = self.RING_SIZE // 2
-        rw = self.RING_W
 
         self._ring_bg_id = self._canvas.create_arc(
             cx-rv, cy-rv, cx+rv, cy+rv,
             start=90, extent=359.9, style=tk.ARC,
-            outline=RING_BG, width=rw
+            outline=RING_BG, width=self.RING_TRACK_W
         )
         self._ring_id = self._canvas.create_arc(
             cx-rv, cy-rv, cx+rv, cy+rv,
             start=90, extent=0, style=tk.ARC,
-            outline=FOCUS_CLR, width=rw
+            outline=FOCUS_CLR, width=self.RING_W
         )
         self._lbl_time = self._canvas.create_text(
             cx, cy, text="25:00",
-            font=("Segoe UI", 46, "bold"), fill=TEXT_CLR
+            font=("Segoe UI", 48, "bold"), fill=TEXT_CLR
         )
 
-        # Session dots
-        dot_frame = tk.Frame(r, bg=BG)
-        dot_frame.pack(pady=2)
-        self._dots = []
-        for _ in range(SESSIONS_BEFORE_LONG):
-            d = tk.Label(dot_frame, text="●", bg=BG, fg=RING_BG,
-                         font=("Segoe UI", 13))
-            d.pack(side=tk.LEFT, padx=4)
-            self._dots.append(d)
-
-        # Buttons
+        # Buttons — one primary action (Start/Pause) filled with the accent,
+        # two quiet ghost actions beside it.
         btn_row = tk.Frame(r, bg=BG)
-        btn_row.pack(pady=18)
-        self._btn_start = self._btn(btn_row, "Start",  self._toggle_start)
+        btn_row.pack(pady=(2, 4))
+        self._btn_start = self._btn(btn_row, "Start",  self._toggle_start, primary=True)
         self._btn_reset = self._btn(btn_row, "Reset",  lambda: self._state.reset())
         self._btn_skip  = self._btn(btn_row, "Skip →", lambda: self._state.skip())
-        for b in (self._btn_start, self._btn_reset, self._btn_skip):
-            b.pack(side=tk.LEFT, padx=7)
+        self._btn_start.pack(side=tk.LEFT, padx=(0, 6))
+        self._btn_reset.pack(side=tk.LEFT, padx=6)
+        self._btn_skip.pack(side=tk.LEFT, padx=(6, 0))
 
         # Hotkey hint
         tk.Label(r, text="Alt+2  open / show", bg=BG, fg=MUTED_CLR,
-                 font=("Segoe UI", 8)).pack()
+                 font=("Segoe UI", 8)).pack(pady=(10, 14))
 
         self._refresh_ui()
 
-    def _btn(self, parent, text, cmd):
-        b = tk.Button(
-            parent, text=text, command=cmd,
-            bg=BTN_BG, fg=TEXT_CLR, activebackground=BTN_ACTIVE,
-            activeforeground=TEXT_CLR, relief=tk.FLAT,
-            font=("Segoe UI", 10, "bold"),
-            width=8, cursor="hand2",
-            borderwidth=0, highlightthickness=0,
-            padx=8, pady=7
-        )
-        b.bind("<Enter>", lambda e: b.configure(bg=BTN_HOVER))
-        b.bind("<Leave>", lambda e: b.configure(bg=BTN_BG))
+    def _btn(self, parent, text, cmd, primary=False):
+        if primary:
+            b = tk.Button(
+                parent, text=text, command=cmd,
+                bg=self._accent, fg=BG,
+                activebackground=_shade(self._accent, 0.82), activeforeground=BG,
+                relief=tk.FLAT, font=("Segoe UI", 10, "bold"),
+                width=9, cursor="hand2", borderwidth=0, highlightthickness=0,
+                padx=10, pady=8
+            )
+            b.bind("<Enter>", lambda e: b.configure(bg=self._accent_hover))
+            b.bind("<Leave>", lambda e: b.configure(bg=self._accent))
+        else:
+            b = tk.Button(
+                parent, text=text, command=cmd,
+                bg=BG, fg=TEXT_CLR,
+                activebackground=SAND, activeforeground=TEXT_CLR,
+                relief=tk.FLAT, font=("Segoe UI", 10),
+                width=7, cursor="hand2", borderwidth=0, highlightthickness=0,
+                padx=8, pady=8
+            )
+            b.bind("<Enter>", lambda e: b.configure(bg=RING_BG))
+            b.bind("<Leave>", lambda e: b.configure(bg=BG))
         return b
 
     # ── Handlers ───────────────────────────────────────────────────────────────
@@ -407,18 +418,86 @@ class TimerWindow:
 
         self._lbl_phase.configure(text=PHASE_NAMES[ph], fg=clr)
 
+        # Re-tint the primary button only when the phase accent actually changes,
+        # so it doesn't fight the hover state on every one-second tick.
+        if clr != self._accent:
+            self._accent       = clr
+            self._accent_hover = _shade(clr, 0.90)
+            self._btn_start.configure(bg=clr, activebackground=_shade(clr, 0.82))
+
         status = "▶" if s.is_running else "⏸"
         self.root.title(f"{status} {fmt_time(t)} · {PHASE_NAMES[ph]}")
 
-        completed = (SESSIONS_BEFORE_LONG if ph == 2
-                     else s.session_count % SESSIONS_BEFORE_LONG)
-        for i, d in enumerate(self._dots):
-            d.configure(fg=clr if i < completed else RING_BG)
-
         self._btn_start.configure(text="Pause" if s.is_running else "Start")
+
+        self._update_mini()
 
         if self._tray:
             self._tray.update(ph, t)
+
+    # ── Mini corner timer ───────────────────────────────────────────────────────
+    MINI_RING = 17   # outer radius of the tiny ring
+    MINI_W    = 4    # ring stroke width
+
+    def _build_mini(self):
+        # Borderless, always-on-top pill that "pops out" in the top-right corner
+        # while the main window is hidden. Display-only — no click handlers.
+        m = tk.Toplevel(self.root)
+        m.overrideredirect(True)            # no title bar / no taskbar entry
+        m.wm_attributes("-topmost", True)
+        m.configure(bg=FOCUS_CLR)           # outer bg shows as a thin coloured edge
+        inner = tk.Frame(m, bg=BG)
+        inner.pack(padx=2, pady=2)
+
+        d = 2 * self.MINI_RING
+        self._mini_canvas = tk.Canvas(inner, width=d, height=d, bg=BG,
+                                      highlightthickness=0)
+        self._mini_canvas.pack(side=tk.LEFT, padx=(7, 3), pady=5)
+        r = self.MINI_RING - self.MINI_W
+        c = self.MINI_RING
+        self._mini_canvas.create_arc(c-r, c-r, c+r, c+r, start=90, extent=359.9,
+                                     style=tk.ARC, outline=RING_BG, width=self.MINI_W)
+        self._mini_ring = self._mini_canvas.create_arc(
+            c-r, c-r, c+r, c+r, start=90, extent=0, style=tk.ARC,
+            outline=FOCUS_CLR, width=self.MINI_W)
+
+        self._mini_time = tk.Label(inner, text=fmt_time(self._state.time_remaining),
+                                   bg=BG, fg=TEXT_CLR, font=("Segoe UI", 14, "bold"))
+        self._mini_time.pack(side=tk.LEFT, padx=(2, 9))
+
+        self._mini = m
+        m.withdraw()
+
+    def _position_mini(self):
+        self._mini.update_idletasks()
+        w  = self._mini.winfo_width()
+        sw = self._mini.winfo_screenwidth()
+        self._mini.geometry(f"+{sw - w - 12}+12")
+
+    def _update_mini(self):
+        if self._mini is None:
+            return
+        s     = self._state
+        ph    = s.phase
+        clr   = PHASE_COLOURS[ph]
+        total = PHASE_DURATIONS[ph]
+        frac  = s.time_remaining / total if total else 0
+        self._mini_canvas.itemconfigure(self._mini_ring, extent=frac * 359.9,
+                                        outline=clr)
+        self._mini_time.configure(text=fmt_time(s.time_remaining))
+        self._mini.configure(bg=clr)
+
+    def _show_mini(self):
+        if self._mini is None:
+            return
+        self._update_mini()
+        self._mini.deiconify()
+        self._position_mini()
+        self._mini.lift()
+
+    def _hide_mini(self):
+        if self._mini is not None:
+            self._mini.withdraw()
 
     # ── Window management ──────────────────────────────────────────────────────
     def _on_close(self):
@@ -426,18 +505,26 @@ class TimerWindow:
         # tray icon could fail to appear even when pystray imports cleanly.
         if self._tray is not None and self._tray._icon is not None:
             self.root.withdraw()
+            self._show_mini()
         else:
             self._do_quit()
 
+    def _fit_window(self):
+        # Right-size to the content instead of a hardcoded box, so the window
+        # hugs the ring (~288px wide) rather than leaving dead side margins.
+        self.root.update_idletasks()
+        self._w = self.root.winfo_reqwidth()  + 2 * self.MARGIN_X
+        self._h = self.root.winfo_reqheight() + self.MARGIN_Y
+        self._snap_top_right()
+
     def _snap_top_right(self):
-        w = 400
-        h = 500
         sw = self.root.winfo_screenwidth()
-        x  = sw - w - 10
+        x  = max(0, sw - self._w - 10)
         y  = 10
-        self.root.geometry(f"{w}x{h}+{x}+{y}")
+        self.root.geometry(f"{self._w}x{self._h}+{x}+{y}")
 
     def show(self):
+        self._hide_mini()
         self._snap_top_right()
         self.root.deiconify()
         self.root.lift()
@@ -448,6 +535,7 @@ class TimerWindow:
             self.show()
         else:
             self.root.withdraw()
+            self._show_mini()
 
     def _quit(self):
         # Called from any thread (tray menu, hotkey). Marshals to the main
