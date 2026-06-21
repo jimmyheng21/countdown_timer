@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import winsound
+import ctypes
 
 try:
     from PIL import Image, ImageDraw
@@ -38,6 +39,33 @@ MUTED_CLR  = "#B09070"   # medium warm brown
 PHASE_NAMES     = {0: "FOCUS", 1: "BREAK"}
 PHASE_COLOURS   = {0: FOCUS_CLR, 1: BREAK_CLR}
 PHASE_DURATIONS = {0: FOCUS_DURATION, 1: BREAK_DURATION}
+
+# ── Single instance ───────────────────────────────────────────────────────────
+# Two instances would both poll/consume the one TOGGLE_SIGNAL file and fight
+# over window visibility, desyncing the mini timer. Guard with a named mutex
+# (Windows): the second instance sees ERROR_ALREADY_EXISTS. The handle is kept
+# alive for the process lifetime via a module global; the OS frees it on exit.
+_single_instance_handle = None
+
+def _acquire_single_instance():
+    # Returns True if this is the only instance, False if one is already running.
+    # On any unexpected failure, returns True so the app never refuses to start.
+    global _single_instance_handle
+    ERROR_ALREADY_EXISTS = 183
+    try:
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateMutexW.restype  = ctypes.c_void_p
+        k32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+        handle = k32.CreateMutexW(None, 0, "PomodoroTimer_SingleInstance")
+        err = ctypes.get_last_error()
+    except Exception:
+        return True
+    if not handle:
+        return True
+    if err == ERROR_ALREADY_EXISTS:
+        return False
+    _single_instance_handle = handle
+    return True
 
 # ── Global hotkey bridge ──────────────────────────────────────────────────────
 # The global hotkey lives in AutoHotkey (see pomodoro.ahk), not in this process.
@@ -121,10 +149,12 @@ class PomodoroState:
             self._generation += 1
             gen = self._generation
         threading.Thread(target=self._run, args=(gen,), daemon=True).start()
+        self._notify()   # immediate UI feedback regardless of caller (tray/window)
 
     def pause(self):
         with self._lock:
             self.is_running = False
+        self._notify()   # immediate UI feedback regardless of caller (tray/window)
 
     def reset(self):
         with self._lock:
@@ -436,11 +466,12 @@ class TimerWindow:
 
     # ── Handlers ───────────────────────────────────────────────────────────────
     def _toggle_start(self):
+        # start()/pause() now _notify(), so the refresh happens via the tick
+        # callback — no direct _refresh_ui() needed (and the tray path gets it too).
         if self._state.is_running:
             self._state.pause()
         else:
             self._state.start()
-        self._refresh_ui()
 
     def _schedule_refresh(self):
         try:
@@ -627,6 +658,13 @@ class TimerWindow:
 
 # ── Entry ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    state  = PomodoroState()
-    window = TimerWindow(state)
-    window.run()
+    if _acquire_single_instance():
+        state  = PomodoroState()
+        window = TimerWindow(state)
+        window.run()
+    else:
+        # Already running — tell the user and exit (no sys.exit; the script just
+        # ends and the process closes). Avoids two instances fighting the signal.
+        ctypes.windll.user32.MessageBoxW(
+            None, "Pomodoro Timer is already running.",
+            "Pomodoro Timer", 0x40)  # MB_ICONINFORMATION

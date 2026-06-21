@@ -33,6 +33,10 @@ A single-file Windows desktop Pomodoro timer (`countdown_timer.py`, ~550 lines, 
 
 **Graceful degradation.** `HAS_TRAY` (pystray+Pillow) and `HAS_NOTIFY` (plyer) gate features at import. Notably, with no tray there's nothing to restore to, so `_on_close` **quits** instead of hiding — check `self._tray._icon is not None`, not the import flag. Notifications fall back to a hidden-PowerShell balloon when plyer is absent.
 
+**State mutators all `_notify()`.** `start`, `pause`, `reset`, and `skip` each call `_notify()` so every surface refreshes immediately regardless of which thread/UI triggered them (window button *or* tray menu). Don't reintroduce a direct `_refresh_ui()` in the window button handler — that was removed once these notified, and it would double-refresh. A new mutator must `_notify()` too, or the tray path will show stale state.
+
+**Single instance.** `_acquire_single_instance()` (named Win32 mutex, `CreateMutexW`) guards `__main__`; a second launch shows an "already running" `MessageBoxW` and the script just ends (no `sys.exit`). This prevents two instances from both consuming the one `TOGGLE_SIGNAL` and desyncing. The mutex handle is held in a module global for the process lifetime; the OS frees it on exit. On any failure the guard returns `True` (never blocks startup).
+
 **Phase model.** Phases are integer keys into three parallel dicts: `PHASE_NAMES`, `PHASE_COLOURS`, `PHASE_DURATIONS` (currently `0=FOCUS`, `1=BREAK`; `_advance` alternates). To add/change a phase, update **all three dicts** together — they are looked up by the same key everywhere.
 
 **Accent cohesion.** The active phase colour drives the badge, the progress ring, *and* the primary (Start/Pause) button. `_refresh_ui` re-tints the primary button only when the accent actually changes (not every tick, to avoid fighting hover state); hover/pressed shades are derived with `_shade()`.
