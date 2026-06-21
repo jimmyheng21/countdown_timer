@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A single-file Windows desktop Pomodoro timer (`countdown_timer.py`, ~550 lines, plain `tkinter`). It runs as a hidden tool window that lives in the system tray and a tiny always-on-top corner widget; there is no package structure, no test suite, and no build step.
+A single-file Windows desktop Pomodoro timer (`countdown_timer.py`, ~670 lines, plain `tkinter`). It runs as a hidden tool window that lives in the system tray and a tiny always-on-top corner widget; there is no package structure, no test suite, and no build step.
 
 ## Commands
 
@@ -15,7 +15,7 @@ A single-file Windows desktop Pomodoro timer (`countdown_timer.py`, ~550 lines, 
 
 ## Platform
 
-**Windows-only.** Hard dependencies on `winsound` (alert beeps), the `-toolwindow` attribute, and a PowerShell `NotifyIcon` fallback for notifications. Do not assume cross-platform.
+**Windows-only.** Hard dependencies on `winsound` (alert beeps), the `-toolwindow` attribute, a PowerShell `NotifyIcon` fallback for notifications, `ctypes`/Win32 (`CreateMutexW` single-instance guard, `MessageBoxW`), and `subprocess` launching the bundled AutoHotkey script. Do not assume cross-platform.
 
 ## Architecture — the parts that span files/threads
 
