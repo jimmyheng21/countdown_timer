@@ -1,4 +1,5 @@
 #Requires AutoHotkey v2.0
+#SingleInstance Force          ; a relaunch replaces any prior instance
 ; ─────────────────────────────────────────────────────────────────────────────
 ;  Pomodoro Timer — global hotkey
 ;
@@ -6,10 +7,10 @@
 ;  signal file that the running app polls for and acts on (so the app keeps its
 ;  own window/mini-timer state in sync).
 ;
-;  Usage:
-;    1. Install AutoHotkey v2 from https://www.autohotkey.com/
-;    2. Double-click this file (or add it to shell:startup to run at login).
-;    3. Start the timer (run.bat). Press Alt+2 anywhere to show/hide it.
+;  The timer app launches this script automatically on start and closes it on
+;  quit, so normally you don't run it by hand. You can still launch it directly
+;  (double-click, or add to shell:startup) if you want Alt+2 without the app.
+;  Requires AutoHotkey v2 — https://www.autohotkey.com/
 ; ─────────────────────────────────────────────────────────────────────────────
 
 signalFile := A_Temp "\pomodoro_toggle.signal"

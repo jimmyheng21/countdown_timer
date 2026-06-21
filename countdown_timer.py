@@ -2,6 +2,8 @@ import tkinter as tk
 import threading
 import time
 import os
+import shutil
+import subprocess
 import tempfile
 import winsound
 
@@ -41,7 +43,48 @@ PHASE_DURATIONS = {0: FOCUS_DURATION, 1: BREAK_DURATION}
 # The global hotkey lives in AutoHotkey (see pomodoro.ahk), not in this process.
 # AHK drops this signal file on the hotkey; the app polls for it and toggles the
 # window itself, so app-managed state (the corner mini timer) stays correct.
+# The app launches the script on start and terminates it on quit (see run /
+# _do_quit), so Alt+2 is live exactly while the timer is — no manual step.
 TOGGLE_SIGNAL = os.path.join(tempfile.gettempdir(), "pomodoro_toggle.signal")
+AHK_SCRIPT    = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "pomodoro.ahk")
+
+def _find_autohotkey():
+    # Locate the AutoHotkey interpreter: PATH first, then the usual v2/v1
+    # install dirs. Returns the exe path, or None if AutoHotkey isn't installed.
+    for name in ("AutoHotkey64", "AutoHotkey32", "AutoHotkey", "AutoHotkeyU64"):
+        found = shutil.which(name)
+        if found:
+            return found
+    rels = (
+        r"Programs\AutoHotkey\v2\AutoHotkey64.exe",
+        r"Programs\AutoHotkey\v2\AutoHotkey32.exe",
+        r"AutoHotkey\v2\AutoHotkey64.exe",
+        r"AutoHotkey\v2\AutoHotkey32.exe",
+        r"AutoHotkey\v2\AutoHotkey.exe",
+        r"AutoHotkey\AutoHotkey.exe",
+    )
+    for base in (os.environ.get("LOCALAPPDATA"), os.environ.get("PROGRAMFILES"),
+                 os.environ.get("PROGRAMFILES(X86)")):
+        if not base:
+            continue
+        for rel in rels:
+            p = os.path.join(base, rel)
+            if os.path.isfile(p):
+                return p
+    return None
+
+def _start_hotkey_helper():
+    # Launch pomodoro.ahk so Alt+2 works for the app's lifetime. Best effort:
+    # returns the Popen handle to terminate on quit, or None if AutoHotkey or
+    # the script is missing (the tray icon and double-click still work).
+    exe = _find_autohotkey()
+    if not exe or not os.path.isfile(AHK_SCRIPT):
+        return None
+    try:
+        return subprocess.Popen([exe, AHK_SCRIPT])
+    except OSError:
+        return None
 
 # ── Pomodoro state ─────────────────────────────────────────────────────────────
 class PomodoroState:
@@ -252,6 +295,7 @@ class TimerWindow:
     def __init__(self, state: PomodoroState):
         self._state = state
         self._tray  = None
+        self._ahk   = None   # Popen handle for pomodoro.ahk (started in run())
         self._mini  = None   # tiny corner timer, shown while main window hidden
         self._w     = 320    # placeholder; recomputed from content in _fit_window
         self._h     = 484
@@ -304,8 +348,9 @@ class TimerWindow:
 
         # Quiet brand eyebrow — letter-spaced caps, deliberately recessive so the
         # time stays the hero. Not bold: it labels, it doesn't announce.
-        tk.Label(r, text="P O M O D O R O", bg=BG, fg=MUTED_CLR,
-                 font=("Segoe UI", 9)).pack(pady=(16, 2))
+        eyebrow = tk.Label(r, text="P O M O D O R O", bg=BG, fg=MUTED_CLR,
+                           font=("Segoe UI", 9))
+        eyebrow.pack(pady=(16, 2))
 
         # Phase badge — carries the live accent (FOCUS_CLR / BREAK_CLR).
         self._lbl_phase = tk.Label(r, text="FOCUS", bg=BG, fg=FOCUS_CLR,
@@ -347,11 +392,22 @@ class TimerWindow:
         self._btn_reset.pack(side=tk.LEFT, padx=6)
         self._btn_skip.pack(side=tk.LEFT, padx=(6, 0))
 
-        # Hotkey hint
-        tk.Label(r, text="Alt+2  open / show", bg=BG, fg=MUTED_CLR,
-                 font=("Segoe UI", 8)).pack(pady=(10, 14))
+        # Hint
+        hint = tk.Label(r, text="Alt+2 or double-click  ·  show / minimise",
+                        bg=BG, fg=MUTED_CLR, font=("Segoe UI", 8))
+        hint.pack(pady=(10, 14))
+
+        # Double-click any non-button surface to minimise back to the corner.
+        # Bind the individual non-button widgets, NOT root: binding root would
+        # also catch double-clicks on the buttons (root is in their bindtags)
+        # and minimise unexpectedly. Each widget here fires the toggle once.
+        self._bind_double_toggle(eyebrow, self._lbl_phase, self._canvas, hint)
 
         self._refresh_ui()
+
+    def _bind_double_toggle(self, *widgets):
+        for w in widgets:
+            w.bind("<Double-Button-1>", lambda e: self._toggle_visibility())
 
     def _btn(self, parent, text, cmd, primary=False):
         if primary:
@@ -426,6 +482,8 @@ class TimerWindow:
     # ── Mini corner timer ───────────────────────────────────────────────────────
     MINI_RING = 17   # outer radius of the tiny ring
     MINI_W    = 4    # ring stroke width
+    MINI_X    = 12   # gap from the right screen edge
+    MINI_Y    = 50   # gap from the top — below maximised windows' title-bar buttons
 
     def _build_mini(self):
         # Borderless, always-on-top pill that "pops out" in the top-right corner
@@ -454,13 +512,19 @@ class TimerWindow:
         self._mini_time.pack(side=tk.LEFT, padx=(2, 9))
 
         self._mini = m
+        # Double-click anywhere on the mini opens the full window (the same
+        # toggle the window's double-click / Close uses, in reverse). Bind the
+        # toplevel ONLY: child clicks reach it via bindtags, and binding the
+        # children too would fire the toggle twice (leaf + toplevel) per click.
+        m.configure(cursor="hand2")
+        self._bind_double_toggle(m)
         m.withdraw()
 
     def _position_mini(self):
         self._mini.update_idletasks()
         w  = self._mini.winfo_width()
         sw = self._mini.winfo_screenwidth()
-        self._mini.geometry(f"+{sw - w - 12}+12")
+        self._mini.geometry(f"+{sw - w - self.MINI_X}+{self.MINI_Y}")
 
     def _update_mini(self):
         if self._mini is None:
@@ -544,11 +608,17 @@ class TimerWindow:
     def _do_quit(self):
         # Must run on the main thread. After root.destroy(), mainloop() returns
         # and the process exits naturally — daemon threads are killed then.
+        if self._ahk is not None:
+            try:
+                self._ahk.terminate()   # stop only the AHK script we launched
+            except Exception:
+                pass
         if self._tray:
             self._tray.stop()
         self.root.destroy()
 
     def run(self):
+        self._ahk  = _start_hotkey_helper()   # Alt+2 lives for the app's lifetime
         self._tray = TrayApp(self._state, self._request_show, self._quit)
         self._tray.run_detached()
         self._refresh_ui()
